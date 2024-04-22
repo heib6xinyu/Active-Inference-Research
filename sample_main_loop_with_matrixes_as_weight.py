@@ -3,11 +3,13 @@
 import numpy as np
 import jax.numpy as jnp
 from jax.scipy.special import expit as sigmoid
+from jax import grad
 import gymnasium as gym
 import matplotlib.pyplot as plt
 import jax
 from IPython.display import display, clear_output
 import time
+from jax import value_and_grad
 
 #%%
 
@@ -31,6 +33,7 @@ weights = {
   "transition": jnp.asarray(np.random.uniform(-1, 1, size=(hidden, hidden))),
   "decoder": jnp.asarray(np.random.uniform(-1, 1, size=(hidden, *env.observation_space.shape))),
 }
+learning_rate = 0.0001
 
 # %%
 
@@ -69,22 +72,40 @@ def ce(o1, o2):
   Q = jnp.clip(Q, epsilon, 1.0)  # Clip Q to avoid log(0)
   return -jnp.sum(P * jnp.log(Q)) # NOTE: code this up
 
-# %%
-# #testing kl and ce
+
+def loss_n_predict(params, o_t, o_tp1):
+  # Compute states and predictions
+  s_t = posterior(params, o_t)  # Current "real" state
+  prior_s_tp1 = sigmoid(transition(params, s_t))  # Next assumed state
+  posterior_s_tp1 = sigmoid(posterior(params, o_tp1))  # Next "real" state
+  o_hat_tp1 = jnp.tanh(decode(params, prior_s_tp1))  # Next assumed observation
+
+  # Compute loss
+  kl_val = kl(posterior_s_tp1, prior_s_tp1)
+  ce_val = ce(o_tp1, o_hat_tp1)
+  VFE = kl_val + ce_val
+
+  return VFE, o_hat_tp1  # Return both loss and predictions
+
+# This function will return the loss, predictions, and gradients
+def evaluate_and_grad(params, o_t, o_tp1):
+  # This function only calculates the gradient of the first output (loss)
+  #value_and_grad(..., has_aux=True) is used here.
+  #This tells JAX to treat additional outputs of combined_function (in this case, o_hat_tp1) as auxiliary data
+  # that do not contribute to the gradient computation but are still returned from the function.
+  loss_and_grad = value_and_grad(loss_n_predict, argnums=0, has_aux=True)
+  (loss, predictions), grads = loss_and_grad(params, o_t, o_tp1)
+  return loss, predictions, grads
+
+
+ # %% test loss and gradient
 # o_t = obs   #the current observation
 # o_tp1 = obs #the next observation
-# # dynamics
-# s_t = posterior(weights, o_t)               #the current "real" state
-# print(s_t.shape)
-# prior_s_tp1 = sigmoid(transition(weights, s_t))      #the next agent assume state
-# posterior_s_tp1 = sigmoid(posterior(weights, o_tp1)) #the next "real" state
-# o_hat_tp1 = jnp.tanh(decode(weights, prior_s_tp1))    #the next agent assume observation
-# klval = kl(posterior_s_tp1, prior_s_tp1)
-# print(klval)
-# ceval = ce(o_tp1, o_hat_tp1)
-# VFE = (klval + ceval).mean()
-# print(VFE)
-# # %%
+# loss, o_hat_tp1, gradients = evaluate_and_grad(weights, o_t, o_tp1)
+# weights = {k: v - learning_rate * gradients[k] for k, v in weights.items()}
+# print(gradients)
+# print(o_hat_tp1)
+# %%
 # #Testing visualize the actual and predicted observations
 # plt.figure(figsize=(12, 6))
 # plt.subplot(1, 2, 1)
@@ -112,6 +133,8 @@ def ce(o1, o2):
 
 
 
+
+
 # %%
 
 for step in range(200):
@@ -120,15 +143,11 @@ for step in range(200):
   o_t = obs   #the current observation
   o_tp1 = obs #the next observation
   # dynamics
-  s_t = posterior(weights, o_t)               #the current "real" state
-  prior_s_tp1 = sigmoid(transition(weights, s_t))      #the next agent assume state
-  posterior_s_tp1 = sigmoid(posterior(weights, o_tp1)) #the next "real" state
-  o_hat_tp1 = jnp.tanh(decode(weights, prior_s_tp1))    #the next agent assume observation
-  
-  klval = kl(posterior_s_tp1, prior_s_tp1)
-  ceval = ce(o_tp1, o_hat_tp1)
-  VFE = (klval + ceval).mean()
-
+  loss, o_hat_tp1, gradients = evaluate_and_grad(weights, o_t, o_tp1)
+  weights = {k: v - learning_rate * gradients[k] for k, v in weights.items()}
+  print(weights)
+  print(gradients)
+  #time.sleep(5)
 # Visualize the actual and predicted observations
 
   clear_output(wait = True)
@@ -160,7 +179,7 @@ for step in range(200):
   plt.suptitle(f'Step {step + 1}')
   display(plt.gcf())
   plt.close()
-  #time.sleep(0.1)
+
 
   if terminated or truncated:
         observation, info = env.reset()
