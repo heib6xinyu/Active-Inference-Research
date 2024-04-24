@@ -2,7 +2,6 @@
 
 import numpy as np
 import jax.numpy as jnp
-from jax.scipy.special import expit as sigmoid
 from jax import grad
 import gymnasium as gym
 import matplotlib.pyplot as plt
@@ -11,6 +10,8 @@ from IPython.display import display, clear_output
 import time
 from jax import value_and_grad
 import jax.random as random
+from jax.nn import relu, sigmoid,tanh
+
 #%%
 
 env = gym.make("HalfCheetah-v4", render_mode="rgb_array")
@@ -24,7 +25,6 @@ action.shape
 # %%
 
 env.observation_space.shape
-print(obs)
 # %%
 
 hidden = 32
@@ -63,12 +63,12 @@ def loss_n_predict(params, o_t, o_tp1):
   # Compute states and predictions
   global key
   key, subkey = random.split(key)  # Split the key to maintain statelessness
-  s_t_mean = posterior(params, o_t)  # Current "real" state's mean
+  s_t_mean = sigmoid(posterior(params, o_t))  # Current "real" state's mean
   s_t_z = reparameterize(subkey,s_t_mean)  # current "real" state's z
-  prior_s_tp1_z = sigmoid(transition(params, s_t_z))  # Next assumed state's z
+  prior_s_tp1_z = sigmoid(transition(params, s_t_z)) # Next assumed state's z
   posterior_s_tp1_mean = sigmoid(posterior(params, o_tp1))  # Next "real" state's mean
   posterior_s_tp1_z = reparameterize(subkey, posterior_s_tp1_mean)  # Next "real" state's z
-  o_hat_tp1 = jnp.tanh(decode(params, prior_s_tp1_z))  # Next assumed observation
+  o_hat_tp1 = decode(params, prior_s_tp1_z)  # Next assumed observation
 
   # Compute loss
   kl_val = kl(posterior_s_tp1_z, prior_s_tp1_z)
@@ -89,25 +89,27 @@ def evaluate_and_grad(params, o_t, o_tp1):
 
 
 # %% test loss and gradient
-o_t = obs   #the current observation
-o_tp1 = obs #the next observation
-loss, o_hat_tp1, gradients = evaluate_and_grad(weights, o_t, o_tp1)
-weights = {k: v - learning_rate * gradients[k] for k, v in weights.items()}
-print(loss)
-print(gradients)
-print(o_hat_tp1)
+# o_t = obs   #the current observation
+# o_tp1 = obs #the next observation
+# loss, o_hat_tp1, gradients = evaluate_and_grad(weights, o_t, o_tp1)
+# weights = {k: v - learning_rate * gradients[k] for k, v in weights.items()}
+# print(loss)
+# print(gradients)
+# print(o_hat_tp1)
 
-next_obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
-if terminated or truncated:
-      observation, info = env.reset()
-else:
-    obs = next_obs
+# next_obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
+# if terminated or truncated:
+#       observation, info = env.reset()
+# else:
+#     obs = next_obs
 
 
 
 
 # %%
+num_steps = 200
 
+vfe_values = []
 for step in range(200):
   next_obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
   # example data
@@ -121,7 +123,8 @@ for step in range(200):
   #print(weights)
   #print(gradients)
   #time.sleep(5)
-# Visualize the actual and predicted observations
+  vfe_values.append(loss)
+  # Visualize the actual and predicted observations
 
   clear_output(wait = True)
   plt.figure(figsize=(12, 6))
@@ -160,6 +163,16 @@ for step in range(200):
      obs = next_obs
 
 env.close()
+# Plot the metrics of losses.
+plt.figure(figsize=(12, 4))
+plt.plot(vfe_values, label='VFE')
+plt.title('Variational Free Energy over Time')
+plt.xlabel('Time Step')
+plt.ylabel('VFE')
+plt.legend()
+
+plt.tight_layout()
+plt.show()
 # %%
 
 
