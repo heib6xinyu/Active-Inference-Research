@@ -7,7 +7,7 @@ This repository is a comprehensive archive of my research and experiments in the
 The repository contains various projects and experiments that explore different aspects of Active Inference, using computational models and simulations to validate theories and hypotheses.
 
 ### Projects
-- [Variational Autoencoder for HalfCheetah-v4 Environment](#variational-autoencoder-for-halfcheetah-v4-environment): An implementation of a Variational Autoencoder (VAE) designed to model and predict the dynamics of the "HalfCheetah-v4" environment from the OpenAI Gym toolkit. This project uses the JAX library to leverage automatic differentiation and efficient computation.
+- [Variational Autoencoder for HalfCheetah-v4 Environment](https://github.com/heib6xinyu/Active-Inference-Research/tree/master/4_24_2024%20Variational%20Autoencoder%20for%20HalfCheetah-v4%20Environment): An implementation of a Variational Autoencoder (VAE) designed to model and predict the dynamics of the "HalfCheetah-v4" environment from the OpenAI Gym toolkit. This project uses the JAX library to leverage automatic differentiation and efficient computation.
 
 
 
