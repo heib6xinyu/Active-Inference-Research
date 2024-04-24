@@ -10,7 +10,7 @@ import jax
 from IPython.display import display, clear_output
 import time
 from jax import value_and_grad
-
+import jax.random as random
 #%%
 
 env = gym.make("HalfCheetah-v4", render_mode="rgb_array")
@@ -24,7 +24,7 @@ action.shape
 # %%
 
 env.observation_space.shape
-env.render().shape
+print(obs)
 # %%
 
 hidden = 32
@@ -34,54 +34,44 @@ weights = {
   "decoder": jnp.asarray(np.random.uniform(-1, 1, size=(hidden, *env.observation_space.shape))),
 }
 learning_rate = 0.0001
-
-# %%
-
-weights["encoder"].shape
-
-
+key = random.PRNGKey(0)  # Initialize a random key
+weights['encoder'].shape
 # %%
 
 def posterior(params, observation):
   return observation @ params['encoder']
 
-def transition(params, state_tm1) -> jax.Array:
-  return state_tm1 @ params['transition']
+def transition(params, z) -> jax.Array:
+  return z @ params['transition']
 
-def decode(params, state) -> jax.Array:
-  return state @ params['decoder']
+def decode(params, z) -> jax.Array:
+  return z @ params['decoder']
 
-def kl(s1, s2):
-  epsilon = 1e-8 #smal number to prevent division by 0 ?is this necessary?
-  P = s1
-  Q = s2 
-  #normalize
-  #P /= P.sum()
-  #Q /= Q.sum()
-  logval = jnp.clip(P/Q, epsilon, 1.0)
-  
-  return jnp.sum(P *jnp.log(logval)) # NOTE: code this up
+def reparameterize(key, mean, std = 1.0):
+  #fix std 1
+  eps = random.normal(key, shape = mean.shape)
+  return mean + std * eps
+
+def kl(s1_mean, s2_mean):
+  return jnp.mean(0.5 * jnp.square(s1_mean - s2_mean))
 
 def ce(o1, o2):
-  P = o1
-  Q = o2
-  #normalize
-  P /= P.sum()
-  Q /= Q.sum()
-  epsilon = 1e-8
-  Q = jnp.clip(Q, epsilon, 1.0)  # Clip Q to avoid log(0)
-  return -jnp.sum(P * jnp.log(Q)) # NOTE: code this up
+  return jnp.mean(jnp.square(o1 - o2))
 
 
 def loss_n_predict(params, o_t, o_tp1):
   # Compute states and predictions
-  s_t = posterior(params, o_t)  # Current "real" state
-  prior_s_tp1 = sigmoid(transition(params, s_t))  # Next assumed state
-  posterior_s_tp1 = sigmoid(posterior(params, o_tp1))  # Next "real" state
-  o_hat_tp1 = jnp.tanh(decode(params, prior_s_tp1))  # Next assumed observation
+  global key
+  key, subkey = random.split(key)  # Split the key to maintain statelessness
+  s_t_mean = posterior(params, o_t)  # Current "real" state's mean
+  s_t_z = reparameterize(subkey,s_t_mean)  # current "real" state's z
+  prior_s_tp1_z = sigmoid(transition(params, s_t_z))  # Next assumed state's z
+  posterior_s_tp1_mean = sigmoid(posterior(params, o_tp1))  # Next "real" state's mean
+  posterior_s_tp1_z = reparameterize(subkey, posterior_s_tp1_mean)  # Next "real" state's z
+  o_hat_tp1 = jnp.tanh(decode(params, prior_s_tp1_z))  # Next assumed observation
 
   # Compute loss
-  kl_val = kl(posterior_s_tp1, prior_s_tp1)
+  kl_val = kl(posterior_s_tp1_z, prior_s_tp1_z)
   ce_val = ce(o_tp1, o_hat_tp1)
   VFE = kl_val + ce_val
 
@@ -98,39 +88,20 @@ def evaluate_and_grad(params, o_t, o_tp1):
   return loss, predictions, grads
 
 
- # %% test loss and gradient
-# o_t = obs   #the current observation
-# o_tp1 = obs #the next observation
-# loss, o_hat_tp1, gradients = evaluate_and_grad(weights, o_t, o_tp1)
-# weights = {k: v - learning_rate * gradients[k] for k, v in weights.items()}
-# print(gradients)
-# print(o_hat_tp1)
-# %%
-# #Testing visualize the actual and predicted observations
-# plt.figure(figsize=(12, 6))
-# plt.subplot(1, 2, 1)
-# plt.bar(range(len(o_tp1)), o_tp1, color='skyblue')
-# plt.title('Bar Plot of Actual Observation Vector')
-# plt.xlabel('Index')
-# plt.ylabel('Value')
-# plt.grid(True)
+# %% test loss and gradient
+o_t = obs   #the current observation
+o_tp1 = obs #the next observation
+loss, o_hat_tp1, gradients = evaluate_and_grad(weights, o_t, o_tp1)
+weights = {k: v - learning_rate * gradients[k] for k, v in weights.items()}
+print(loss)
+print(gradients)
+print(o_hat_tp1)
 
-
-# plt.subplot(1, 2, 2)
-# plt.bar(range(len(o_hat_tp1)), o_hat_tp1, color='skyblue')
-# plt.title('Bar Plot of predicted Observation Vector')
-# plt.xlabel('Index')
-# plt.ylabel('Value')
-# plt.grid(True)
-
-# all_values = np.concatenate([o_tp1, o_hat_tp1])
-# lower_bound = min(all_values)
-# upper_bound = max(all_values)
-# abs_max = max(abs(lower_bound), abs(upper_bound))
-# plt.subplot(1, 2, 1).set_ylim([-abs_max, abs_max])  # Set symmetrical limits around zero
-# plt.subplot(1, 2, 2).set_ylim([-abs_max, abs_max])  # Set symmetrical limits around zero
-# plt.show()
-
+next_obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
+if terminated or truncated:
+      observation, info = env.reset()
+else:
+    obs = next_obs
 
 
 
@@ -144,9 +115,11 @@ for step in range(200):
   o_tp1 = obs #the next observation
   # dynamics
   loss, o_hat_tp1, gradients = evaluate_and_grad(weights, o_t, o_tp1)
+  ## Gradient clipping
+  #gradients = {k: jnp.clip(v, -1.0, 1.0) for k, v in gradients.items()}
   weights = {k: v - learning_rate * gradients[k] for k, v in weights.items()}
-  print(weights)
-  print(gradients)
+  #print(weights)
+  #print(gradients)
   #time.sleep(5)
 # Visualize the actual and predicted observations
 
