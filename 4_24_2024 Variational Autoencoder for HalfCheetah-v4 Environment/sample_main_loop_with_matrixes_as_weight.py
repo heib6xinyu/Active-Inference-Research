@@ -2,12 +2,10 @@
 
 import numpy as np
 import jax.numpy as jnp
-from jax import grad
 import gymnasium as gym
 import matplotlib.pyplot as plt
 import jax
 from IPython.display import display, clear_output
-import time
 from jax import value_and_grad
 import jax.random as random
 from jax.nn import relu, sigmoid,tanh
