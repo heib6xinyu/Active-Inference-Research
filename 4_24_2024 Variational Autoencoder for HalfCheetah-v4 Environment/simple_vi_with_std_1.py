@@ -47,7 +47,7 @@ def decode(params, z) -> jax.Array:
 
 def reparameterize(key, mean, std = 1.0):
   #fix std 1
-  eps = random.normal(key, shape = mean.shape)
+  #eps = random.normal(key, shape = mean.shape)
   return mean #+ std * eps
 #NOTE for now just use the mean
 
@@ -65,16 +65,16 @@ def loss_n_predict(params, o_t, o_tp1):
   # Compute states and predictions
   global key
   key, subkey = random.split(key)  # Split the key to maintain statelessness NOTE change the key setting
-  s_t_mean = sigmoid(posterior(params, o_t))  # Current "real" state's mean
-  s_t_z = reparameterize(subkey,s_t_mean)  # current "real" state's z
-  prior_s_tp1_mean = sigmoid(transition(params, s_t_z)) # Next assumed state's mean NOTE i should also sample here instead of linear transformation to make it st+1
-  prior_s_tp1_z = reparameterize(subkey, prior_s_tp1_mean) # Next assumed state's z
-  posterior_s_tp1_mean = sigmoid(posterior(params, o_tp1))  # Next "real" state's mean
-  posterior_s_tp1_z = reparameterize(subkey, posterior_s_tp1_mean)  # Next "real" state's z
-  o_hat_tp1 = decode(params, prior_s_tp1_z)  # Next assumed observation
+  s_t = sigmoid(posterior(params, o_t))  # Current "real" state's mean
+  #s_t_z = reparameterize(subkey,s_t_mean)  # current "real" state's z
+  prior_s_tp1 = sigmoid(transition(params, s_t)) # Next assumed state's mean NOTE i should also sample here instead of linear transformation to make it st+1
+  #prior_s_tp1_z = reparameterize(subkey, prior_s_tp1_mean) # Next assumed state's z
+  posterior_s_tp1 = sigmoid(posterior(params, o_tp1))  # Next "real" state's mean
+  #posterior_s_tp1_z = reparameterize(subkey, posterior_s_tp1_mean)  # Next "real" state's z
+  o_hat_tp1 = decode(params, prior_s_tp1)  # Next assumed observation
 
   # Compute loss
-  kl_val = kl(posterior_s_tp1_z, prior_s_tp1_z)
+  kl_val = kl(posterior_s_tp1, prior_s_tp1)
   ce_val = ce(o_tp1, o_hat_tp1)
   VFE = kl_val + ce_val
 
@@ -117,7 +117,7 @@ for step in range(200):
   next_obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
   # example data
   o_t = obs   #the current observation
-  o_tp1 = obs #the next observation
+  o_tp1 = next_obs #the next observation
   # dynamics
   loss, o_hat_tp1, gradients = evaluate_and_grad(weights, o_t, o_tp1)
   ## Gradient clipping
