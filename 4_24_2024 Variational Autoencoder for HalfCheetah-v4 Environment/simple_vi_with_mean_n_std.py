@@ -10,43 +10,25 @@ from jax import value_and_grad
 import jax.random as random
 from jax.nn import relu, sigmoid,tanh, softplus
 
-#%%
 
-env = gym.make("HalfCheetah-v4", render_mode="rgb_array")
-obs, info = env.reset()
-action = env.action_space.sample()
-# %%
-
-hidden = 32
-weights = {
-  "encoder_mean": jnp.asarray(np.random.uniform(-1, 1, size=(*env.observation_space.shape, hidden))),
-  "encoder_log_var": jnp.asarray(np.random.uniform(-0.5, 0, size=(*env.observation_space.shape, hidden))),
-  "transition_mean": jnp.asarray(np.random.uniform(-1, 1, size=(hidden, hidden))),
-  "transition_log_var": jnp.asarray(np.random.uniform(-0.5, 0, size=(hidden, hidden))),
-  "decoder_mean": jnp.asarray(np.random.uniform(-1, 1, size=(hidden, *env.observation_space.shape))),
-  "decoder_log_var": jnp.asarray(np.random.uniform(-0.5, 0, size=(hidden, *env.observation_space.shape))),
-}
-learning_rate = 0.0001
-key = random.PRNGKey(0)  # Initialize a random key
 
 # %%
-
 def posterior(params, observation):
   mu = observation @ params['encoder_mean']
   log_var = observation @ params['encoder_log_var']
-  
+  log_var = softplus(log_var)
   return mu, log_var
 
 def transition(params, z) -> jax.Array:
   mu = z @ params['transition_mean']
   log_var = z @ params['transition_log_var']
-  
+  log_var = softplus(log_var)
   return mu, log_var
 
 def decode(params, z) -> jax.Array:
   mu = z @ params['decoder_mean']
   log_var = z @ params['decoder_log_var']
-
+  log_var = softplus(log_var)
   return mu, log_var
 
 def reparameterize(key, mean, log_var):
@@ -57,20 +39,37 @@ def reparameterize(key, mean, log_var):
 
 # %%
 def kl(s1_mean, s1_log_var, s2_mean, s2_log_var):
-  s1_std = jnp.exp(0.5 * s1_log_var)  # Standard deviation
-  s2_std = jnp.exp(0.5 * s2_log_var)  # Standard deviation
-  return jnp.sum(0.5 * (jnp.square(s1_mean - s2_mean) / jnp.square(s2_std) + jnp.square(s1_std) / jnp.square(s2_std) - jnp.log(jnp.square(s1_std) / jnp.square(s2_std)) - 1))
-#NOTE kl divergence with mu 1 sigma 1 mu 2 sigma 2 (of the same D dimentional)
-#NOTE covariance matrix 
-#NOTE Plug in to the formula With sigmas vector being 1, should be similar to MSE
+  epsilon = 1e-8  # Small constant for numerical stability
+  s1_std = jnp.exp(0.5 * s1_log_var)
+  s2_std = jnp.exp(0.5 * s2_log_var)
+  var_ratio = jnp.square(s1_std) / (jnp.square(s2_std) + epsilon)
+  mean_diff_sq = jnp.square(s1_mean - s2_mean) / (jnp.square(s2_std) + epsilon)
+  log_var_ratio = jnp.log(var_ratio + epsilon)
+
+  kl_div = 0.5 * (mean_diff_sq + var_ratio - log_var_ratio - 1)
+  return jnp.sum(kl_div)
+
+
+
+def normalize_features(feature, reference):
+  mean = jnp.mean(reference)
+  std = jnp.std(reference)
+  normalized_feature = (feature - mean) / std
+  return normalized_feature
+
 
 def ce(o1, o2_mean, o2_log_var):
+  # Normalize features for likelihood calculation
+  o1_normalized = normalize_features(o1, o1)  # Normalize by itself
+  o2_mean_normalized = normalize_features(o2_mean, o2_mean)  # Normalize by the reference o1
+  
   # Compute the variance from log variance for numerical stability
   o2_var = jnp.exp(o2_log_var)
-  #o2_var = jnp.clip(o2_var, 1e-3, 1e3)  # Prevent extreme values
-  squared_diff = jnp.square(o1 - o2_mean)
-  log_term = jnp.log(2 * jnp.pi * o2_var)
-  exp_term = squared_diff / o2_var
+  o2_var = jnp.clip(o2_var, 1e-3, 1e3)  # Prevent extreme values
+
+  squared_diff = jnp.square(o1_normalized - o2_mean_normalized)
+  log_term = jnp.log(2 * jnp.pi * o2_var + 1e-8)
+  exp_term = squared_diff / (o2_var + 1e-8)
   return jnp.mean(-0.5 * (log_term + exp_term))
 
 
@@ -79,15 +78,15 @@ def ce(o1, o2_mean, o2_log_var):
 def loss_n_predict(params, o_t, o_tp1):
   # Compute states and predictions
   global key
-  key, subkey = random.split(key)  # Split the key to maintain statelessness NOTE change the key setting
+  key, subkey1, subkey2, subkey3 = random.split(key, 4)  # Split the key to maintain statelessness NOTE change the key setting
   (s_t_mean, s_t_logvar) = posterior(params, o_t)  # Current "real" state's mean
-  s_t_z = reparameterize(subkey, s_t_mean, s_t_logvar)  # current "real" state's z
+  s_t_z = reparameterize(subkey1, s_t_mean, s_t_logvar)  # current "real" state's z
   (prior_s_tp1_mean, prior_s_tp1_logvar) = transition(params, s_t_z) # Next assumed state's mean NOTE i should also sample here instead of linear transformation to make it st+1
-  prior_s_tp1_z = reparameterize(subkey, prior_s_tp1_mean, prior_s_tp1_logvar) # Next assumed state's z
+  prior_s_tp1_z = reparameterize(subkey2, prior_s_tp1_mean, prior_s_tp1_logvar) # Next assumed state's z
   (posterior_s_tp1_mean, posterior_s_tp1_logvar) = posterior(params, o_tp1)  # Next "real" state's mean
   #posterior_s_tp1_z = reparameterize(subkey, posterior_s_tp1_mean, posterior_s_tp1_logvar)  # Next "real" state's z
   (o_hat_tp1_mean, o_hat_tp1_logvar) = decode(params, prior_s_tp1_z)  # Next assumed observation
-  o_hat_tp1 = reparameterize(subkey, o_hat_tp1_mean, o_hat_tp1_logvar)
+  o_hat_tp1 = reparameterize(subkey3, o_hat_tp1_mean, o_hat_tp1_logvar)
   # Compute loss
 
 
@@ -112,6 +111,24 @@ def evaluate_and_grad(params, o_t, o_tp1):
   (loss, predictions), grads = loss_and_grad(params, o_t, o_tp1)
   return loss, predictions, grads
 
+#%%
+
+env = gym.make("HalfCheetah-v4", render_mode="rgb_array")
+obs, info = env.reset()
+action = env.action_space.sample()
+# %%
+
+hidden = 32
+weights = {
+  "encoder_mean": jnp.asarray(np.random.uniform(-1, 1, size=(*env.observation_space.shape, hidden))),
+  "encoder_log_var": jnp.asarray(np.random.uniform(0, 0.5, size=(*env.observation_space.shape, hidden))),
+  "transition_mean": jnp.asarray(np.random.uniform(-1, 1, size=(hidden, hidden))),
+  "transition_log_var": jnp.asarray(np.random.uniform(0, 0.5, size=(hidden, hidden))),
+  "decoder_mean": jnp.asarray(np.random.uniform(-1, 1, size=(hidden, *env.observation_space.shape))),
+  "decoder_log_var": jnp.asarray(np.random.uniform(0, 0.5, size=(hidden, *env.observation_space.shape))),
+}
+learning_rate = 0.0001
+key = random.PRNGKey(0)  # Initialize a random key
 
 # %% test loss and gradient
 o_t = obs   #the current observation
